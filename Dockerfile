@@ -23,6 +23,13 @@ ENV MODEL_NAME=$MODEL_NAME \
     TOKENIZER_REVISION=$TOKENIZER_REVISION \
     QUANTIZATION=$QUANTIZATION \
     BASE_PATH=$BASE_PATH \
+    # Put /src on Python's startup path so sitecustomize.py is imported in
+    # both this wrapper process and the child `vllm serve` process.
+    PYTHONPATH="/src" \
+    # Default-on compatibility patch for the known Mistral Small 3.1 HF
+    # tokenizer regex mismatch. Set false only after upstream artifacts no
+    # longer require the repair.
+    CIT_FIX_MISTRAL_REGEX="true" \
     # The RunPod network volume mounts at $BASE_PATH; keep the HF cache there so
     # model downloads persist across worker cold starts.
     HF_HOME="${BASE_PATH}/huggingface-cache/hub" \
