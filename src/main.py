@@ -28,6 +28,7 @@ HEALTH_POLL_INTERVAL = 2  # seconds
 
 CIT_MISTRAL_MODEL_MARKER = "mistral-small-3.1-24b-instruct-2503"
 CIT_OFFICIAL_TOKENIZER = "mistralai/Mistral-Small-3.1-24B-Instruct-2503"
+CIT_OFFICIAL_TOKENIZER_REVISION = "main"
 
 vllm_process: subprocess.Popen | None = None
 
@@ -41,13 +42,14 @@ def configure_cit_tokenizer() -> None:
 
     The ISTA-DASLab GPTQ repository contains model weights that vLLM can load,
     but its HF tokenizer path triggers the known Mistral Small 3.1 regex
-    mismatch and produces corrupted text.  Keep the quantized weights while
+    mismatch and produces corrupted text. Keep the quantized weights while
     explicitly loading the tokenizer from the official Mistral repository via
     mistral_common.
 
-    This is intentionally narrow: it activates only for the Mistral Small 3.1
-    24B Instruct 2503 family and can be disabled with
-    CIT_FIX_MISTRAL_REGEX=false.
+    The GPTQ MODEL_REVISION is a commit in the weights repository and must never
+    be reused as the tokenizer revision. vLLM otherwise inherits the model
+    revision for the tokenizer lookup when the tokenizer repo is separate,
+    which causes a Hugging Face RevisionNotFound error.
     """
     model_name = os.getenv("MODEL_NAME", "")
     if CIT_MISTRAL_MODEL_MARKER not in model_name.lower():
@@ -56,25 +58,21 @@ def configure_cit_tokenizer() -> None:
         logging.warning("CIT tokenizer compatibility mode is disabled")
         return
 
-    # Force these values rather than using setdefault: the RunPod endpoint may
-    # still carry TOKENIZER_MODE=auto from an earlier template revision.
     os.environ["TOKENIZER_NAME"] = os.getenv(
         "CIT_TOKENIZER_NAME", CIT_OFFICIAL_TOKENIZER
     ).strip() or CIT_OFFICIAL_TOKENIZER
     os.environ["TOKENIZER_MODE"] = "mistral"
 
-    # MODEL_REVISION belongs to the GPTQ weights repository. Do not reuse that
-    # SHA for the tokenizer repository. Only pass a tokenizer revision when it
-    # was explicitly configured for CIT.
-    cit_tokenizer_revision = os.getenv("CIT_TOKENIZER_REVISION", "").strip()
-    if cit_tokenizer_revision:
-        os.environ["TOKENIZER_REVISION"] = cit_tokenizer_revision
-    else:
-        os.environ.pop("TOKENIZER_REVISION", None)
+    # Always give the separate tokenizer repository its own valid revision.
+    # Default to the official repo's main branch unless explicitly overridden.
+    os.environ["TOKENIZER_REVISION"] = os.getenv(
+        "CIT_TOKENIZER_REVISION", CIT_OFFICIAL_TOKENIZER_REVISION
+    ).strip() or CIT_OFFICIAL_TOKENIZER_REVISION
 
     logging.info(
-        "CIT tokenizer configured: tokenizer=%s tokenizer_mode=mistral",
+        "CIT tokenizer configured: tokenizer=%s tokenizer_mode=mistral tokenizer_revision=%s",
         os.environ["TOKENIZER_NAME"],
+        os.environ["TOKENIZER_REVISION"],
     )
 
 
@@ -106,7 +104,6 @@ def start_vllm() -> subprocess.Popen:
     argv += build_vllm_args()
 
     logging.info("Starting vLLM: %s", " ".join(argv))
-    # Child gets our stdout/stderr so vLLM logs land in the worker logs.
     return subprocess.Popen(argv)
 
 
@@ -157,8 +154,6 @@ def main() -> None:
         logging.error("%s", e)
         sys.exit(1)
 
-    # Import here (not at module import time) so the RunPod SDK and handler
-    # start only after the backend is confirmed healthy.
     import handler as proxy_handler
     import runpod
 
