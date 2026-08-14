@@ -26,7 +26,56 @@ VLLM_PORT = os.getenv("VLLM_PORT", "8000")
 STARTUP_TIMEOUT = int(os.getenv("VLLM_STARTUP_TIMEOUT", "1200"))  # seconds
 HEALTH_POLL_INTERVAL = 2  # seconds
 
+CIT_MISTRAL_MODEL_MARKER = "mistral-small-3.1-24b-instruct-2503"
+CIT_OFFICIAL_TOKENIZER = "mistralai/Mistral-Small-3.1-24B-Instruct-2503"
+
 vllm_process: subprocess.Popen | None = None
+
+
+def _truthy_env(name: str, default: str = "true") -> bool:
+    return os.getenv(name, default).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def configure_cit_tokenizer() -> None:
+    """Use the official Mistral tokenizer for the CIT GPTQ checkpoint.
+
+    The ISTA-DASLab GPTQ repository contains model weights that vLLM can load,
+    but its HF tokenizer path triggers the known Mistral Small 3.1 regex
+    mismatch and produces corrupted text.  Keep the quantized weights while
+    explicitly loading the tokenizer from the official Mistral repository via
+    mistral_common.
+
+    This is intentionally narrow: it activates only for the Mistral Small 3.1
+    24B Instruct 2503 family and can be disabled with
+    CIT_FIX_MISTRAL_REGEX=false.
+    """
+    model_name = os.getenv("MODEL_NAME", "")
+    if CIT_MISTRAL_MODEL_MARKER not in model_name.lower():
+        return
+    if not _truthy_env("CIT_FIX_MISTRAL_REGEX"):
+        logging.warning("CIT tokenizer compatibility mode is disabled")
+        return
+
+    # Force these values rather than using setdefault: the RunPod endpoint may
+    # still carry TOKENIZER_MODE=auto from an earlier template revision.
+    os.environ["TOKENIZER_NAME"] = os.getenv(
+        "CIT_TOKENIZER_NAME", CIT_OFFICIAL_TOKENIZER
+    ).strip() or CIT_OFFICIAL_TOKENIZER
+    os.environ["TOKENIZER_MODE"] = "mistral"
+
+    # MODEL_REVISION belongs to the GPTQ weights repository. Do not reuse that
+    # SHA for the tokenizer repository. Only pass a tokenizer revision when it
+    # was explicitly configured for CIT.
+    cit_tokenizer_revision = os.getenv("CIT_TOKENIZER_REVISION", "").strip()
+    if cit_tokenizer_revision:
+        os.environ["TOKENIZER_REVISION"] = cit_tokenizer_revision
+    else:
+        os.environ.pop("TOKENIZER_REVISION", None)
+
+    logging.info(
+        "CIT tokenizer configured: tokenizer=%s tokenizer_mode=mistral",
+        os.environ["TOKENIZER_NAME"],
+    )
 
 
 def apply_local_model_args() -> None:
@@ -93,6 +142,7 @@ def main() -> None:
     global vllm_process
 
     apply_local_model_args()
+    configure_cit_tokenizer()
 
     if not (os.getenv("MODEL_NAME") or os.getenv("VLLM_CONFIG_FILE") or os.getenv("MODEL")):
         logging.warning("MODEL_NAME is not set; `vllm serve` will fail without a --model argument")
