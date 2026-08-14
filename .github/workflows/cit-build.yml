@@ -1,0 +1,57 @@
+name: Build CIT Worker
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - Dockerfile
+      - builder/**
+      - src/**
+      - .github/workflows/cit-build.yml
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push CIT 1.0 worker
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ghcr.io/krp-01/worker-vllm:cit-1.0
+            ghcr.io/krp-01/worker-vllm:latest
+          labels: |
+            org.opencontainers.image.title=CIT 1.0 vLLM Worker
+            org.opencontainers.image.description=RunPod vLLM worker with CIT Mistral tokenizer compatibility fix
+            org.opencontainers.image.source=https://github.com/krp-01/worker-vllm
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build summary
+        run: |
+          echo "### CIT worker image published" >> "$GITHUB_STEP_SUMMARY"
+          echo '```text' >> "$GITHUB_STEP_SUMMARY"
+          echo 'ghcr.io/krp-01/worker-vllm:cit-1.0' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
