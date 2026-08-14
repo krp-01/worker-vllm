@@ -40,12 +40,12 @@ jobs:
           push: true
           platforms: linux/amd64
           tags: |
-            ghcr.io/krp-01/worker-vllm:cit-1.0-r3
+            ghcr.io/krp-01/worker-vllm:cit-1.0-r4
             ghcr.io/krp-01/worker-vllm:cit-1.0
             ghcr.io/krp-01/worker-vllm:latest
           labels: |
             org.opencontainers.image.title=CIT 1.0 vLLM Worker
-            org.opencontainers.image.description=RunPod vLLM worker with official Mistral tokenizer and independent tokenizer revision
+            org.opencontainers.image.description=RunPod vLLM worker with HF Pixtral processor and Mistral regex repair
             org.opencontainers.image.source=https://github.com/krp-01/worker-vllm
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -54,5 +54,5 @@ jobs:
         run: |
           echo "### CIT worker image published" >> "$GITHUB_STEP_SUMMARY"
           echo '```text' >> "$GITHUB_STEP_SUMMARY"
-          echo 'ghcr.io/krp-01/worker-vllm:cit-1.0-r3' >> "$GITHUB_STEP_SUMMARY"
+          echo 'ghcr.io/krp-01/worker-vllm:cit-1.0-r4' >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
