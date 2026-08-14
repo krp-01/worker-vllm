@@ -26,34 +26,34 @@ VLLM_PORT = os.getenv("VLLM_PORT", "8000")
 STARTUP_TIMEOUT = int(os.getenv("VLLM_STARTUP_TIMEOUT", "1200"))
 HEALTH_POLL_INTERVAL = 2
 
-CIT_MISTRAL_MODEL_MARKER = "mistral-small-3.1-24b-instruct-2503"
+CIT_MISTRAL_32_AWQ_MARKER = "mistral-small-3.2-24b-instruct-2506-awq-sym"
 
 vllm_process: subprocess.Popen | None = None
 
 
-def _truthy_env(name: str, default: str = "true") -> bool:
-    return os.getenv(name, default).strip().lower() not in {"0", "false", "no", "off"}
+def configure_cit_model() -> None:
+    """Normalize stale endpoint settings for the CIT Mistral 3.2 AWQ model.
 
-
-def configure_cit_tokenizer() -> None:
-    """Keep Mistral3 on its HF processor and patch the regex at load time.
-
-    Forcing ``tokenizer_mode=mistral`` with a separate Mistral tokenizer breaks
-    PixtralProcessor startup because the multimodal processor expects HF image
-    special tokens. ``sitecustomize.py`` patches both AutoTokenizer and
-    AutoProcessor with ``fix_mistral_regex=True`` instead, so use auto mode and
-    let model+processor come from the same GPTQ repository.
+    The previous CIT image used a separate tokenizer and a Mistral 3.1-specific
+    processor workaround. The Mistral 3.2 AWQ checkpoint ships its own HF
+    tokenizer/chat template and quantization metadata, so let vLLM infer those
+    from the model repository and prevent old RunPod template variables from
+    overriding them.
     """
     model_name = os.getenv("MODEL_NAME", "")
-    if CIT_MISTRAL_MODEL_MARKER not in model_name.lower():
-        return
-    if not _truthy_env("CIT_FIX_MISTRAL_REGEX"):
+    if CIT_MISTRAL_32_AWQ_MARKER not in model_name.lower():
         return
 
     os.environ["TOKENIZER_MODE"] = "auto"
     os.environ.pop("TOKENIZER_NAME", None)
     os.environ.pop("TOKENIZER_REVISION", None)
-    logging.info("CIT tokenizer configured: HF processor + regex patch, tokenizer_mode=auto")
+    os.environ.pop("CONFIG_FORMAT", None)
+    os.environ.pop("LOAD_FORMAT", None)
+    os.environ.pop("QUANTIZATION", None)
+
+    logging.info(
+        "CIT model configured: Mistral Small 3.2 24B AWQ, checkpoint tokenizer/chat template, tokenizer_mode=auto"
+    )
 
 
 def apply_local_model_args() -> None:
@@ -110,7 +110,7 @@ def main() -> None:
     global vllm_process
 
     apply_local_model_args()
-    configure_cit_tokenizer()
+    configure_cit_model()
 
     if not (os.getenv("MODEL_NAME") or os.getenv("VLLM_CONFIG_FILE") or os.getenv("MODEL")):
         logging.warning("MODEL_NAME is not set; `vllm serve` will fail without a --model argument")
