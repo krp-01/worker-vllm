@@ -23,12 +23,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 
 VLLM_HOST = "127.0.0.1"
 VLLM_PORT = os.getenv("VLLM_PORT", "8000")
-STARTUP_TIMEOUT = int(os.getenv("VLLM_STARTUP_TIMEOUT", "1200"))  # seconds
-HEALTH_POLL_INTERVAL = 2  # seconds
+STARTUP_TIMEOUT = int(os.getenv("VLLM_STARTUP_TIMEOUT", "1200"))
+HEALTH_POLL_INTERVAL = 2
 
 CIT_MISTRAL_MODEL_MARKER = "mistral-small-3.1-24b-instruct-2503"
-CIT_OFFICIAL_TOKENIZER = "mistralai/Mistral-Small-3.1-24B-Instruct-2503"
-CIT_OFFICIAL_TOKENIZER_REVISION = "main"
 
 vllm_process: subprocess.Popen | None = None
 
@@ -38,50 +36,27 @@ def _truthy_env(name: str, default: str = "true") -> bool:
 
 
 def configure_cit_tokenizer() -> None:
-    """Use the official Mistral tokenizer for the CIT GPTQ checkpoint.
+    """Keep Mistral3 on its HF processor and patch the regex at load time.
 
-    The ISTA-DASLab GPTQ repository contains model weights that vLLM can load,
-    but its HF tokenizer path triggers the known Mistral Small 3.1 regex
-    mismatch and produces corrupted text. Keep the quantized weights while
-    explicitly loading the tokenizer from the official Mistral repository via
-    mistral_common.
-
-    The GPTQ MODEL_REVISION is a commit in the weights repository and must never
-    be reused as the tokenizer revision. vLLM otherwise inherits the model
-    revision for the tokenizer lookup when the tokenizer repo is separate,
-    which causes a Hugging Face RevisionNotFound error.
+    Forcing ``tokenizer_mode=mistral`` with a separate Mistral tokenizer breaks
+    PixtralProcessor startup because the multimodal processor expects HF image
+    special tokens. ``sitecustomize.py`` patches both AutoTokenizer and
+    AutoProcessor with ``fix_mistral_regex=True`` instead, so use auto mode and
+    let model+processor come from the same GPTQ repository.
     """
     model_name = os.getenv("MODEL_NAME", "")
     if CIT_MISTRAL_MODEL_MARKER not in model_name.lower():
         return
     if not _truthy_env("CIT_FIX_MISTRAL_REGEX"):
-        logging.warning("CIT tokenizer compatibility mode is disabled")
         return
 
-    os.environ["TOKENIZER_NAME"] = os.getenv(
-        "CIT_TOKENIZER_NAME", CIT_OFFICIAL_TOKENIZER
-    ).strip() or CIT_OFFICIAL_TOKENIZER
-    os.environ["TOKENIZER_MODE"] = "mistral"
-
-    # Always give the separate tokenizer repository its own valid revision.
-    # Default to the official repo's main branch unless explicitly overridden.
-    os.environ["TOKENIZER_REVISION"] = os.getenv(
-        "CIT_TOKENIZER_REVISION", CIT_OFFICIAL_TOKENIZER_REVISION
-    ).strip() or CIT_OFFICIAL_TOKENIZER_REVISION
-
-    logging.info(
-        "CIT tokenizer configured: tokenizer=%s tokenizer_mode=mistral tokenizer_revision=%s",
-        os.environ["TOKENIZER_NAME"],
-        os.environ["TOKENIZER_REVISION"],
-    )
+    os.environ["TOKENIZER_MODE"] = "auto"
+    os.environ.pop("TOKENIZER_NAME", None)
+    os.environ.pop("TOKENIZER_REVISION", None)
+    logging.info("CIT tokenizer configured: HF processor + regex patch, tokenizer_mode=auto")
 
 
 def apply_local_model_args() -> None:
-    """Load args baked into the image by download_model.py (Option 2 builds).
-
-    The baked model path wins over MODEL_NAME env vars, and HF hub access is
-    forced offline since the weights are already on disk.
-    """
     if not os.path.exists(LOCAL_MODEL_ARGS_PATH):
         return
     try:
@@ -102,15 +77,12 @@ def apply_local_model_args() -> None:
 def start_vllm() -> subprocess.Popen:
     argv = ["vllm", "serve", "--host", VLLM_HOST, "--port", VLLM_PORT]
     argv += build_vllm_args()
-
     logging.info("Starting vLLM: %s", " ".join(argv))
     return subprocess.Popen(argv)
 
 
 def wait_for_vllm(proc: subprocess.Popen) -> None:
-    """Poll GET /health until vLLM is ready; fail fast if it crashes or times out."""
     url = f"http://{VLLM_HOST}:{VLLM_PORT}/health"
-
     deadline = time.monotonic() + STARTUP_TIMEOUT
     while time.monotonic() < deadline:
         if proc.poll() is not None:
@@ -124,7 +96,6 @@ def wait_for_vllm(proc: subprocess.Popen) -> None:
         except (urllib.error.URLError, ConnectionError, OSError):
             pass
         time.sleep(HEALTH_POLL_INTERVAL)
-
     raise RuntimeError(f"vLLM did not become healthy within {STARTUP_TIMEOUT}s")
 
 
